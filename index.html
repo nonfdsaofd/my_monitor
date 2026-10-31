@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>监控</title>
+    <style>
+        body * {
+            user-select: none;
+        }
+        #cpu, #memory, #upload, #download, #datetime, #wheather, #pop, #city, #battery, #timer_div > * {
+            font-size: xx-large;
+            font-weight: bolder;
+        }
+        #time {
+            font-size: 135px;
+        }
+        #cpu{
+            display: inline;
+        } 
+        #circle {
+            width: 15px;
+            height: 15px;
+            background-color: red;
+            border-radius: 50%;
+            float: right;
+        }
+        #net, #proxy {
+            float: right;
+            font-weight: bolder;
+            margin-right: 5px;
+            color: red;
+        }
+        #ping_phone {
+            width: 15px;
+            height: 15px;
+            background-color: red;
+            border-radius: 50%;
+            float: right;
+            margin-right: 5px;
+        }
+        /* === 修改点：增加 color: green; 让字体颜色固定为绿色，粗细等已和“代理”一致 === */
+        #phone_signal {
+            float: right;
+            font-weight: bolder;
+            margin-right: 5px;
+            color: green; 
+        }
+    </style>
+</head>
+<body>
+    <div id="cpu">cpu: %</div>
+    <div id="circle"></div>
+    <div id="net">移动</div>
+    <div id="proxy">代理</div>
+    <div id="ping_phone"></div>
+    <div id="phone_signal"></div>
+    <div>
+        <span id="memory">内存: %</span>&nbsp;&nbsp;
+        <span id="upload">上传: KB/s</span>
+    </div>
+    <div>
+        <span id="battery">电量: %</span>&nbsp;&nbsp;
+        <span id="download">下载: KB/s</span>
+    </div>
+    <div id="city">城市: </div>
+    <div id="wheather">温度: </div>
+    <div id="pop">降雨率: </div>
+    <div id="datetime">日期: </div>
+    <div id="time"></div>
+
+    <hr>
+    
+    <div id="timer_div">
+        <button id="timer_btn_15" onclick="clickTimer(15)">开始15分钟计时</button>
+        <button id="shower_btn" onclick="toggleShowerMode()">洗澡</button>
+        <button id="timer_btn_10" onclick="clickTimer(10)">开始10分钟计时</button>
+        <button id="timer_btn_5" onclick="clickTimer(5)">开始5分钟计时</button>
+        <div id="time_left"></div>
+    </div>
+</body>
+
+<script type="text/javascript">
+    // 将此处改为 const 固定常量，不会再改变
+    const workwin7_ip = '192.168.6.131'
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function SysInfoAddr() {
+        return `${workwin7_ip}:5000`
+    }
+
+    function NetworkInfoAddr() {
+        return `${workwin7_ip}:5001`
+    }
+
+    function ping_phone_addr() {
+        return `${workwin7_ip}:5004`
+    }
+
+    let bk_yellow = false
+    let bk_red = false
+
+    let battery = null
+
+    async function check_battery() {
+        while(true) {
+            let current_time = new Date()
+            let hour = current_time.getHours()
+            let minute = current_time.getMinutes()
+
+            let is_between_charging_time = false
+            if (hour == 12 || hour == 18 || hour == 23) {
+                if (minute < 10) {
+                    is_between_charging_time = true
+                }
+            }
+
+            battery = await navigator.getBattery()
+            if((battery.level <= 0.05 || is_between_charging_time) && !battery.charging) {
+                bk_yellow = true
+                if(!bk_red) {
+                    document.body.style.background = 'yellow'
+                }
+            } else {
+                bk_yellow = false
+                if(!bk_red) {
+                    document.body.style.background = 'white'
+                }
+            }
+            await sleep(10000)
+        }
+	}
+	check_battery()
+
+    // 已经删除 get_work_win7_ip() 函数及其调用，IP不再自适应改变
+
+    var timer_started = false
+    var count_down_timer_id
+    let bk_flashing_timer_id
+    let is_flashing = false
+    let shower_mode = false
+    
+    let alertAudio = null;
+    let last_ping_state = false;
+
+    function createWavBlobUrl() {
+        const sampleRate = 8000;
+        const duration = 3; 
+        const numSamples = sampleRate * duration;
+        const buffer = new ArrayBuffer(44 + numSamples);
+        const view = new DataView(buffer);
+
+        const writeString = (view, offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+
+        writeString(view, 0, 'RIFF');
+        view.setUint32(4, 36 + numSamples, true);
+        writeString(view, 8, 'WAVE');
+        writeString(view, 12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true); 
+        view.setUint16(22, 1, true); 
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate, true);
+        view.setUint16(32, 1, true);
+        view.setUint16(34, 8, true); 
+        writeString(view, 36, 'data');
+        view.setUint32(40, numSamples, true);
+
+        for (let i = 0; i < numSamples; i++) {
+            const t = i / sampleRate;
+            const isOn = (t % 0.2) < 0.1; 
+            const sample = 128 + (isOn ? Math.sin(2 * Math.PI * 880 * t) * 63 : 0);
+            view.setUint8(44 + i, sample);
+        }
+
+        const blob = new Blob([view], { type: 'audio/wav' });
+        return URL.createObjectURL(blob);
+    }
+
+    function playAlertSound() {
+        if (!alertAudio) {
+            let url = createWavBlobUrl();
+            alertAudio = new Audio(url);
+        }
+        alertAudio.currentTime = 0; 
+        alertAudio.play().catch(e => console.log("音频播放失败:", e));
+    }
+
+    function startFlashing() {
+        if (is_flashing) return;
+        is_flashing = true;
+        bk_flashing_timer_id = self.setInterval(function(){
+            if (document.body.style.background != 'red') {
+                bk_red = true
+                document.body.style.background = 'red'
+                window.navigator.vibrate(1000);
+            } else {
+                bk_red = false
+                if (bk_yellow) {
+                    document.body.style.background = 'yellow'    
+                } else {
+                    document.body.style.background = 'white'
+                }
+                window.navigator.vibrate(0);
+            }
+        }, 1000);
+    }
+
+    function stopFlashing() {
+        if (!is_flashing) return;
+        is_flashing = false;
+        self.clearInterval(bk_flashing_timer_id);
+        window.navigator.vibrate(0);
+        bk_red = false;
+        if (!bk_yellow) {
+            document.body.style.background = 'white'
+        } else {
+            document.body.style.background = 'yellow'
+        }
+    }
+
+    function clickTimer(minutes) {
+        if (!timer_started) {
+            seconds_left = minutes * 60
+            count_down_timer_id = self.setInterval(function(){
+                seconds_left -= 1
+                if (seconds_left == 0) {
+                    self.clearInterval(count_down_timer_id)
+                    startFlashing()
+                }
+                document.getElementById('time_left').textContent = `剩余${parseInt(seconds_left/60)}分钟${seconds_left%60}秒`
+            }, 1000);
+
+            for (let i = 5; i<=15; i+=5) {
+                if (i != minutes) {
+                    document.getElementById(`timer_btn_${i}`).style.display = 'none'
+                } else {
+                    document.getElementById(`timer_btn_${i}`).textContent = `停止${minutes}分钟计时`
+                }
+            }
+            document.getElementById('shower_btn').style.display = 'none' 
+
+        } else if (timer_started) {
+            self.clearInterval(count_down_timer_id)
+            stopFlashing()
+            
+            document.getElementById('time_left').textContent = ""
+            for (let i = 5; i<=15; i+=5) {
+                if (i != minutes) {
+                    document.getElementById(`timer_btn_${i}`).style.display = 'inline-block'
+                } else {
+                    document.getElementById(`timer_btn_${i}`).textContent = `开始${i}分钟计时`
+                }
+            }
+            document.getElementById('shower_btn').style.display = 'inline-block' 
+        }
+        timer_started = !timer_started
+    }
+
+    function toggleShowerMode() {
+        shower_mode = !shower_mode;
+        let shower_btn = document.getElementById('shower_btn');
+        if (shower_mode) {
+            shower_btn.textContent = '关闭洗澡模式';
+            for (let i = 5; i<=15; i+=5) {
+                document.getElementById(`timer_btn_${i}`).style.display = 'none';
+            }
+            httpGetAsync('/api/SetMusicVolume/100');
+            setPingPhoneState(); 
+        } else {
+            shower_btn.textContent = '洗澡';
+            if (!timer_started) {
+                for (let i = 5; i<=15; i+=5) {
+                    document.getElementById(`timer_btn_${i}`).style.display = 'inline-block';
+                }
+            }
+            stopFlashing(); 
+            httpGetAsync('/api/SetMusicVolume/0');
+        }
+    }
+
+    function httpGetAsync(theUrl, success_cb=null, failed_cb=null) {
+        var xmlHttp = new XMLHttpRequest();
+        xmlHttp.timeout = 5000;
+        xmlHttp.onreadystatechange = function() { 
+            if (xmlHttp.readyState == 4) {
+                if (xmlHttp.status == 200) {
+                    if (success_cb) success_cb(xmlHttp.responseText)
+                } else {
+                    if (failed_cb) failed_cb()
+                }
+            }   
+        }
+        xmlHttp.open("GET", theUrl, true); 
+        xmlHttp.send(null);
+    }
+
+    function setCpu() {
+        httpGetAsync(`http://${SysInfoAddr()}/api/cpu`, function(cpu_percent){
+            document.getElementById("cpu").textContent = `cpu: ${cpu_percent}%`
+        });
+    }
+
+    function setMemory() {
+        httpGetAsync(`http://${SysInfoAddr()}/api/memory`, function(memory_percent){
+            document.getElementById("memory").textContent = `存: ${memory_percent}%`
+        });
+    }
+    
+    function setDownload() {
+        httpGetAsync(`http://${SysInfoAddr()}/api/download`, function(download){
+            let elem = document.getElementById("download")
+            elem.innerHTML = `<span style="color:red">下:</span> ${download}KB/s`
+            if (download > 100) {
+                elem.style.color = 'red'
+            } else {
+                elem.style.color = 'black'
+            }
+        });
+    }
+    
+    function setUpload() {
+        httpGetAsync(`http://${SysInfoAddr()}/api/upload`, function(upload){
+            document.getElementById("upload").textContent = `上: ${upload}KB/s`
+        });
+    }
+
+    function setDatetime() {
+        let date = new Date()
+        let year = date.getFullYear()
+        let month = date.getMonth()+1
+        let day = date.getDate()
+        let hour = date.getHours()
+        let minute = date.getMinutes()
+        let dayOfWeek = date.getDay()
+
+        let days = ['日','一','二','三','四','五','六'];
+
+        document.getElementById("datetime").textContent = `日期: ${year}/${month}/${day} 周${days[dayOfWeek]}`
+        document.getElementById('time').textContent = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2,'0')}`
+    }
+
+    function setWheatherAndCity() {
+        httpGetAsync(`http://${SysInfoAddr()}/api/wheather`, function(weather){
+            weather = JSON.parse(weather)
+            document.getElementById("city").textContent = `城市: ${weather.city}`;
+
+            let isRainWeather = weather.desc.includes(`雨`)
+            if(isRainWeather) {
+                document.getElementById("wheather").innerHTML = `<span style="color:red">温度: ${weather.temp.toFixed(1)}°C ${weather.desc}</span>`;
+            } else {
+                document.getElementById("wheather").textContent = `温度: ${weather.temp.toFixed(1)}°C ${weather.desc}`;
+            }
+            
+            let content_text = ``
+            let isRainRate = false
+            for(var i = 0; i < weather.pop.length; i++) {
+                if (weather.pop[i] > 0) {
+                    content_text += `<span style="color:red">${weather.pop[i]}%</span> `
+                    isRainRate = true
+                } else {
+                    content_text += `${weather.pop[i]}% `
+                }
+            }
+            let title_text = ''
+            if (isRainRate) {
+                title_text = `<span style="color:red">降雨率: </span>`
+            } else {
+                title_text = `降雨率: `
+            }
+            document.getElementById("pop").innerHTML =  title_text + content_text
+        });
+    }
+
+    function setNetworkState() {
+        network_elem = document.getElementById('net')
+        circle_elem = document.getElementById('circle')
+
+        httpGetAsync(`http://${NetworkInfoAddr()}/api/GetNetworkInfo`, function(res){
+            data = JSON.parse(res)
+            if (data['CurrentNetwork'] == '移动') {
+                network_elem.style.color = 'green'
+            } else {
+                network_elem.style.color = 'red'
+            }
+            if (data['IsNetworkOK']) {
+                circle_elem.style.backgroundColor = 'green'
+            } else {
+                circle_elem.style.backgroundColor = 'red'
+                network_elem.style.color = 'red'
+            }
+            network_elem.textContent = data['CurrentNetwork']
+        }, function(){
+            circle_elem.style.backgroundColor = 'red'
+            network_elem.style.color = 'red'
+        })
+    }
+
+    function setPingPhoneState() {
+        let ping_phone_elem = document.getElementById('ping_phone')
+        let phone_signal_elem = document.getElementById('phone_signal')
+
+        httpGetAsync(`http://${ping_phone_addr()}/api/is_ping_ok`, function(res){
+            let data = JSON.parse(res)
+            let current_ping_state = (data['is_ping_ok'] === true)
+
+            if (current_ping_state) {
+                ping_phone_elem.style.backgroundColor = 'green'
+
+                httpGetAsync(`http://${ping_phone_addr()}/api/get_signal`, function(res_sig){
+                    let data_sig = JSON.parse(res_sig)
+                    if (data_sig['signal'] !== null && data_sig['signal'] !== undefined) {
+                        phone_signal_elem.textContent = data_sig['signal']
+                    } else {
+                        phone_signal_elem.textContent = ''
+                    }
+                }, function(){
+                    phone_signal_elem.textContent = ''
+                })
+
+                if (shower_mode) {
+                    startFlashing() 
+                    
+                    if (!last_ping_state) {
+                        playAlertSound()
+                    }
+                }
+            } else {
+                ping_phone_elem.style.backgroundColor = 'red'
+                phone_signal_elem.textContent = ''
+
+                if (shower_mode) {
+                    stopFlashing() 
+                }
+            }
+            
+            last_ping_state = current_ping_state;
+
+        }, function(){
+            ping_phone_elem.style.backgroundColor = 'red'
+            phone_signal_elem.textContent = '' 
+
+            if (shower_mode) {
+                stopFlashing() 
+            }
+            last_ping_state = false;
+        })
+    }
+
+    function setProxyState() {
+        proxy_elem = document.getElementById('proxy')
+
+        httpGetAsync(`http://${NetworkInfoAddr()}/api/CheckProxyIsOK`, function(res){
+            data = JSON.parse(res)
+            if (data['ProxyIsOK'] == true) {
+                proxy_elem.style.color = 'green'
+            } else {
+                proxy_elem.style.color = 'red'
+            }
+        }, function(){
+            proxy_elem.style.color = 'red'
+        })
+    }
+
+    function setBattery() {
+        if (battery === null) {
+            return
+        }
+        let battery_level = parseInt(battery.level*100)
+        document.getElementById("battery").textContent = `电: ${battery_level}%`
+    }
+
+    function refreshUI() {
+        setCpu()
+        setMemory()
+        setUpload()
+        setDownload()
+        setDatetime()
+        setWheatherAndCity()
+        setNetworkState()
+        setProxyState()
+        setBattery()
+        setPingPhoneState()
+    }
+
+    self.setInterval(function(){
+        refreshUI()
+    }, 1000);
+
+    refreshUI()
+
+</script>
+
+</html>
